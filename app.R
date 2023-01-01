@@ -46,13 +46,21 @@ ui <- fluidPage(
                         "Number of epoch",
                         min = 0,
                         max = 100,
-                        value = 30),
+                        value = 0),
           pickerInput("model",
                       "Select a model:",
-                      selected = "plainCNN",
+                      selected = "mobilenet",
                       choices = c("plainCNN", "mobilenet", "resnet",
                                   "effientNet", "dansenet")
+          ),
+          materialSwitch(
+            inputId = "Id078",
+            label = "Only test mod",
+            value = TRUE, 
+            status = "danger"
           )
+          
+          
           
         ),
 
@@ -60,7 +68,8 @@ ui <- fluidPage(
         mainPanel(
           tabsetPanel(
             tabPanel(
-              "训练曲线图", plotOutput('plots')
+              "训练曲线图", plotOutput('plots'),
+              textOutput("status")
             ),
             
             #tabPanel(
@@ -68,7 +77,7 @@ ui <- fluidPage(
             #),
             tabPanel(
               "测试结果", plotOutput("predict"),
-              verbatimTextOutput("aucvalue")
+              textOutput("auc")
               
             )
             #tabPanel(
@@ -170,22 +179,30 @@ server <- function(input, output) {
         mod,
         layer_dense(units = as.numeric(nums), activation = "softmax")
       ))
-    } 
+    } else {
       model <- keras_model_sequential() %>% 
         layer_flatten() %>% 
         layer_dense(units = 256, activation = "relu") %>% 
         layer_dense(units = 128, activation = "relu") %>% 
         layer_dropout(rate = input$dropout_factor) %>% 
         layer_dense(units = as.numeric(nums), activation = "softmax")
+    }
+     
     
   })
   
   output$plots <- renderPlot({
+    if (input$Id078 == TRUE) {
+      img <- jpeg::readJPEG(paste0(getwd(),"/image/logo.jpg"))
+      history <- as.raster(img)
+    } else {
+      epoches = input$epoch
+    
     training_image_flow <- training_image_flow()
     validation_image_flow <- validation_image_flow()
     model <- models()
     withProgress(message = 'Calculation in progress',
-                 detail = 'This may take a while...', value = 0, {
+                 detail = 'This may take a while...', value = 1, {
     model %>% 
       compile(loss = "categorical_crossentropy", optimizer = "adam", metrics = "accuracy")
     # Include the epoch in the file name
@@ -202,18 +219,28 @@ server <- function(input, output) {
     )
     history <- model %>% fit_generator(
         generator = training_image_flow, 
-        epochs = input$epoch, 
+        epochs = epoches, 
         steps_per_epoch = training_image_flow$n/training_image_flow$batch_size,
         validation_data = validation_image_flow,
         validation_steps = validation_image_flow$n/validation_image_flow$batch_size,
         callbacks = list(cp_callback)
       )
                  })
+    
+    }
     plot(history)
     
   })
+  output$status <- renderText({
+    if (input$Id078 == TRUE) {
+      print("Status: the test mod is on")
+    } else {
+      print("Status: the training mod is on")
+    }
+  })
   
   predict_result <- reactive({
+    
     checkpoint_path <- paste0(getwd(),"/model/",input$model, 
                               "/cp-list{epoch:04d}.ckpt")
     checkpoint_dir <- fs::path_dir(checkpoint_path)
@@ -235,38 +262,44 @@ server <- function(input, output) {
       d <- model %>% 
         predict(test_flow, steps = test_flow$n/test_flow$batch_size) 
       if (i == 1){
-        result <- data.frame(rep(cla[i],length(d[,i])), d[,i]) 
+        result <- data.frame(classes = rep(cla[i],length(d[,i])), prob = d[,i]) 
       }else{
-        result <- data.frame(rep(cla[i],length(d[,i])), 1-d[,i])
+        result <- data.frame(classes = rep(cla[i],length(d[,i])), prob = 1-d[,i]) 
       } 
-      df <- rbind(df,result)
-      rocobj <- roc(
-        df[,1], 
-        df[,2],
-        smooth = F
-      )
+      df <- rbind(df,result) 
     }
-  })
+    attach(df)
+    df %>% within(
+      classes <- factor(classes, levels = cla )
+      
+    )
+    rocobj <- roc(
+      df[,1], 
+      df[,2],
+      smooth = F
+    )
+})
 
   
   output$predict <- renderPlot({
-    rocobj <- predict_result()
-    # 计算临界点/阈值
-    cutOffPoint <- coords(rocobj, "best")
-    cutOffPointText <- paste0(round(cutOffPoint[1],3),"(",round(cutOffPoint[2],3),",",round(cutOffPoint[3],3),")")
     
-    # 计算AUC值
-    auc<-auc(rocobj)[1]
-    # AUC的置信区间
-    auc_low<-ci(rocobj,of="auc")[1]
-    auc_high<-ci(rocobj,of="auc")[3]
-    
-    # 计算置信区间
-    ciobj <- ci.se(rocobj,specificities=seq(0, 1, 0.01))
-    data_ci<-ciobj[1:101,1:3]
-    data_ci<-as.data.frame(data_ci)
-    x=as.numeric(rownames(data_ci))
-    data_ci<-data.frame(x,data_ci)
+    withProgress(message = 'Calculation in progress',
+                 detail = 'This may take a while...', value = 1, {
+                   rocobj <- predict_result()# 计算临界点/阈值
+                   cutOffPoint <- coords(rocobj, "best")
+                   cutOffPointText <- paste0(round(cutOffPoint[1],3),"(",round(cutOffPoint[2],3),",",round(cutOffPoint[3],3),")")
+                   # 计算AUC值
+                   auc<-auc(rocobj)[1]
+                   # AUC的置信区间
+                   auc_low<-ci(rocobj,of="auc")[1]
+                   auc_high<-ci(rocobj,of="auc")[3]
+                   # 计算置信区间
+                   ciobj <- ci.se(rocobj,specificities=seq(0, 1, 0.01))
+                   data_ci<-ciobj[1:101,1:3]
+                   data_ci<-as.data.frame(data_ci)
+                   x=as.numeric(rownames(data_ci))
+                   data_ci<-data.frame(x,data_ci)
+                   })
     
     # 绘图
     ggroc(rocobj,
@@ -282,15 +315,16 @@ server <- function(input, output) {
       geom_ribbon(data = data_ci,                                # 绘制置信区间
                   aes(x=x,ymin=X2.5.,ymax=X97.5.), 
                   fill = 'lightblue',
-                  alpha=0.5)+
-      geom_point(aes(x = cutOffPoint[[2]],y = cutOffPoint[[3]]))+ # 绘制临界点/阈值
-      geom_text(aes(x = cutOffPoint[[2]],y = cutOffPoint[[3]],label=cutOffPointText),vjust=-1) # 添加临界点/阈值文字标签
+                  alpha=0.5)#+
+      #geom_point(aes(x = cutOffPoint[[2]],y = cutOffPoint[[3]]))+ # 绘制临界点/阈值
+      #geom_text(aes(x = cutOffPoint[[2]],y = cutOffPoint[[3]],label=cutOffPointText),vjust=-1) # 添加临界点/阈值文字标签
     
-  })
+ })
   
-  output$aucvlue <- renderPrint({
+  output$auc <- renderText ({
     rocobj <- predict_result()
     auc<-auc(rocobj)[1]
+    print(paste("the auc of model:",input$model,"is",auc))
   }
     
   )
