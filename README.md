@@ -1,2 +1,26 @@
-# example_workflow
-an example git workflow file folder for projects
+### Deep learning tensorflow shiny 
+
+#### 文件构架：
+|- app.R
+
+|- data (默认调用本地文件夹名，内应含已处理好的train、validatation文件夹)
+
+|-- train （按文件夹名分类放置）
+
+|-- validation
+
+|-- test_{分类名} （默认调用测试文件夹序列，内置默认全分类的空文件夹，及测试对象的文件）
+
+|- model （默认保存和调用的训练模型文件，以模型名称命名文件夹）
+
+#### workfow
+
+1. 随机划分测试集患者序列
+2. 按标签汇总文件，并进行训练集和测试集的增强 （此1-2步骤目前需要另外处理完成，按文件架构处理放置后，使用本shiny应用进行）
+3. 设置训练过程参数，如epoch
+4. 记录结果
+
+#### roadmap
+- 目前完善支持二分类，多分类的测试计算可能需要增强
+- 更多的功能，如单个测试模型结果可视化部署或grad-cam等
+- 对前处理的支持和引入
