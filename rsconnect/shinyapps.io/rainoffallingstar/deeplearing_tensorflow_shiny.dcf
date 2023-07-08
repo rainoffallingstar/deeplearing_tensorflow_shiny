@@ -1,0 +1,11 @@
+name: deeplearing_tensorflow_shiny
+title:
+username:
+account: rainoffallingstar
+server: shinyapps.io
+hostUrl: https://api.shinyapps.io/v1
+appId: 8244486
+bundleId: 6819444
+url: https://rainoffallingstar.shinyapps.io/deeplearing_tensorflow_shiny/
+when: 1675777617.59706
+lastSyncTime: 1675777617.59707

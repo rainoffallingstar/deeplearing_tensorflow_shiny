@@ -26,6 +26,14 @@ library(shiny)
 library(pROC)
 library(ggplot2)
 
+# define functions 
+
+image_flow <- function(x,y,z){
+  image_dataset_from_directory(directory = paste0(getwd(), "/", input$filedir, x), 
+                               batch_size = y,
+                               image_size = z)
+}
+
 ui <- fluidPage(
 
     # Application title
@@ -51,7 +59,9 @@ ui <- fluidPage(
                       "Select a model:",
                       selected = "mobilenet",
                       choices = c("plainCNN", "mobilenet", "resnet",
-                                  "effientNet", "dansenet")
+                                  "effientNet", "dansenet",
+                                  "mobilenetV3","xception",
+                                  "nasnet")
           ),
           materialSwitch(
             inputId = "Id078",
@@ -77,7 +87,8 @@ ui <- fluidPage(
             #),
             tabPanel(
               "测试结果", plotOutput("predict"),
-              textOutput("auc")
+              textOutput("auc"),
+              textOutput("acc")
               
             )
             #tabPanel(
@@ -99,43 +110,16 @@ server <- function(input, output) {
     
   })
   
-  
-  training_image_gen <- reactive({
-    image_data_generator(
-      rotation_range = 20,
-      width_shift_range = 0.2,
-      height_shift_range = 0.2,
-      horizontal_flip = TRUE,
-      preprocessing_function = imagenet_preprocess_input
-    )
-  })
-  
-  validation_image_gen <- reactive({
-    image_data_generator(
-      preprocessing_function = imagenet_preprocess_input
-    )
-  })
-  
   training_image_flow <- reactive({
-    
-    flow_images_from_directory(
-      directory = paste0(getwd(), "/", input$filedir, "/train/"), 
-      generator = training_image_gen(), 
-      class_mode = "categorical",
-      batch_size = 5,
-      target_size = c(224, 224), 
-    )
+    image_flow( "/train/",
+                10,
+                c(224, 224))
   })
   
   validation_image_flow <- reactive({
-    flow_images_from_directory(
-      directory = paste0(getwd(), "/", input$filedir, "/validation/"), 
-      generator = validation_image_gen(), 
-      class_mode = "categorical",
-      batch_size = 5,
-      target_size = c(224, 224), 
-      shuffle = FALSE
-    )
+    image_flow( "/validation/",
+                10,
+                c(224, 224))
   })
   
   models <- reactive({
@@ -196,18 +180,17 @@ server <- function(input, output) {
       compile(loss = "categorical_crossentropy", optimizer = "adam", metrics = "accuracy")
     # Include the epoch in the file name
     checkpoint_path <- paste0(getwd(),"/model/",input$model, 
-                              "/cp-list{epoch:04d}.ckpt")
+                              "/best_weight.keras")
     checkpoint_dir <- fs::path_dir(checkpoint_path)
     # Create a callback that saves the model's weights every 2 epochs
     batch_size = 10
     cp_callback <- callback_model_checkpoint(
       filepath = checkpoint_path,
-      verbose = 1,
-      save_weights_only = TRUE,
-      save_freq = 2*batch_size
+      save_best_only = TRUE,
+      mointor = "val_loss"
     )
     history <- model %>% fit_generator(
-        generator = training_image_flow, 
+        training_image_flow, 
         epochs = epoches, 
         steps_per_epoch = training_image_flow$n/training_image_flow$batch_size,
         validation_data = validation_image_flow,
@@ -228,25 +211,22 @@ server <- function(input, output) {
     }
   })
   
+  test_model <- reactive({
+    load_model_tf(paste0(getwd(),"/model/",input$model, 
+                         "/best_weight.keras"))
+  })
+  
   predict_result <- reactive({
     
-    checkpoint_path <- paste0(getwd(),"/model/",input$model, 
-                              "/cp-list{epoch:04d}.ckpt")
-    checkpoint_dir <- fs::path_dir(checkpoint_path)
-    latest <- tf$train$latest_checkpoint(checkpoint_dir)
-    model <- models()
-    load_model_weights_tf(model,latest)
+    test_model <- test_model()
     
     cla <- classnum()
     df <- data.frame()
     for (i in 1:length(cla)) {
-      test_flow <-  flow_images_from_directory(
-        generator = image_data_generator(),
-        directory =  paste0(getwd(), "/", input$filedir, "/test_",
+      test_flow <-  image_flow(paste0("/test_",
                             cla[i],"/"), 
-        target_size = c(224, 224),
-        class_mode = "categorical",
-        shuffle = FALSE
+                            10,
+                            c(224, 224)
       )
       d <- model %>% 
         predict(test_flow, steps = test_flow$n/test_flow$batch_size) 
@@ -314,9 +294,17 @@ server <- function(input, output) {
     rocobj <- predict_result()
     auc<-auc(rocobj)[1]
     print(paste("the auc of model:",input$model,"is",auc))
-  }
-    
-  )
+  })
+  
+  output$acc <- renderText({
+    test_model <- test_model()
+    test_flow <-  image_flow("/test/", 
+                             10,
+                             c(224, 224))
+    result <- evaluate(test_model,test_flow)
+    cat(sprintf("Test accuracy: %.3f\n", result["accuracy"]))
+  })
+  
  
  
 }
