@@ -7,12 +7,13 @@
 #|-- validation
 #|-- test_{分类名} （默认调用测试文件夹序列，内置默认全分类的空文件夹，及测试对象的文件）
 #|- model （默认保存和调用的训练模型文件，以模型名称命名文件夹）
+#|- sauron (用来解释模型的imageset)
 # workflow
 # 1. 随机划分测试集患者序列
 # 2. 按标签汇总文件，并进行训练集和测试集的增强
 # 3. 设置训练过程，epoch设置为30
 # 4. 记录结果
-
+library(sauron)
 library(keras)
 library(tfhub)
 library(tfdatasets)
@@ -25,7 +26,7 @@ library(shinyWidgets)
 library(shiny)
 library(pROC)
 library(ggplot2)
-
+library(tensorflow)
 # define functions 
 # load weights from local files
 applications_model_local <- function(filepath, custom_objects = NULL, compile = FALSE,include_top = FALSE) {
@@ -154,14 +155,12 @@ ui <- fluidPage(
           "测试结果", plotOutput("predict"),
           textOutput("auc"),
           textOutput("acc")
-          
-        )
-        ,
+        ),
         #tabPanel(
         #"数据增强示例", plotOutput("dataaug")
         #),
         tabPanel(
-          "Grad-Cam(under working)",plotOutput("gradcam")
+          "模型解释bySauron",plotOutput("gradcam")
         )
       )
     )
@@ -265,46 +264,34 @@ server <- function(input, output) {
     
   })
   
-  grad_cam_process <- reactive({
-    img_path <- paste0(getwd(),"/image/example.jpg")
-    img_tensor <- tf_read_image(img_path, resize = c(224, 224))
-    preprocessed_img <- img_tensor[tf$newaxis, , , ] %>%
-      imagenet_preprocess_input()
-    model <- models()
-    last_conv_layer_name <- "last_conv_layer"
-    classifier_layer_names <- c("avg_pool", "predictions")
-    last_conv_layer <- model %>% get_layer(last_conv_layer_name)
-    last_conv_layer_model <- keras_model(model$inputs,
-                                         last_conv_layer$output)
-    classifier_input <- layer_input(batch_shape = last_conv_layer$output$shape)
-    x <- classifier_input
-    for (layer_name in classifier_layer_names)
-      x <- get_layer(model, layer_name)(x)
-    classifier_model <- keras_model(classifier_input, x)
-    with (tf$GradientTape() %as% tape, {
-     last_conv_layer_output <- last_conv_layer_model(preprocessed_img)
-     tape$watch(last_conv_layer_output)
-      preds <- classifier_model(last_conv_layer_output)
-      top_pred_index <- tf$argmax(preds[1, ])
-      top_class_channel <- preds[, top_pred_index, style = "python"]
-    })
-    grads <- tape$gradient(top_class_channel, last_conv_layer_output)
-    pooled_grads <- mean(grads, axis = c(1, 2, 3), keepdims = TRUE)
-    heatmap <-
-      (last_conv_layer_output * pooled_grads) %>%
-      mean(axis = -1) %>%
-      .[1, , ]
+  explainer <- reactive({
+    model <- test_model()
+    preprocessing_function <- imagenet_preprocess_input
+    explainer <- CNNexplainer$new(model = model,
+                                  preprocessing_function = preprocessing_function,
+                                  id = "model explainer")
+    return(explainer)
+  })
+  
+  explaination <- reactive({
+    
+    input_imgs_paths <- list.files("sauron/", full.names = TRUE)
+    explanations <- explainer$explain(input_imgs_paths = input_imgs_paths,
+                                      class_index = NULL,
+                                      batch_size = 1,
+                                      methods = c("V", "IG",  "GB", "GGC"),
+                                      steps = 10, # Number of Integrated Gradients steps
+                                      grayscale = FALSE # RGB or Gray gradients
+    )
+    p <- explanations$plot_and_save(combine_plots = TRUE, # Show all explanations side by side on one image?
+                               output_path = NULL, # Where to save output(s)
+                               plot = TRUE # Should output be plotted?
+    )
+    return(p)
   })
   
   output$gradcam <- renderPlot({
-    heatmap <- grad_cam_process()
-    pal <- hcl.colors(256, palette = "Spectral", alpha = .4, rev = TRUE)
-    heatmap <- as.array(heatmap)
-    heatmap[] <- pal[cut(heatmap, 256)]
-    heatmap <- as.raster(heatmap)
-    img <- tf_read_image(img_path, resize = NULL)
-    display_image_tensor(img)
-    rasterImage(heatmap, 0, 0, ncol(img), nrow(img), interpolate = FALSE)
+    explaination()
   })
   output$plots <- renderPlot({
     if (input$Id078 == TRUE) {
