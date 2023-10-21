@@ -27,9 +27,35 @@ library(pROC)
 library(ggplot2)
 
 # define functions 
+# load weights from local files
+applications_model_local <- function(filepath, custom_objects = NULL, compile = FALSE,include_top = FALSE) {
+  message("info::this function is driven from the orginal load_model and load_model_tf functions in the keras for R package")
+  # a basic function to load models for .keras format and try to remove the classfier
+  load_model <- function(filepath, custom_objects = NULL, compile = TRUE, include_top= TRUE) {
+    # prepare custom objects
+    custom_objects <- objects_with_py_function_names(custom_objects)
+    
+    # build args dynamically so we can only pass `compile` if it's supported
+    # (compile requires keras 2.0.4 / tensorflow 1.3)
+    args <- list(
+      filepath = normalize_path(filepath),
+      custom_objects = custom_objects
+    )
+    if (keras_version() >= "2.0.4"){
+      args$compile <- compile
+      args$include_top <- include_top
+    }
+    do.call(keras$models$load_model, args)
+  }
+  if (tensorflow::tf_version() < "2.0.0")
+    stop("TensorFlow version >= 2.0.0 is requires to load models in the SavedModel format.",
+         call. = FALSE)
+  
+  mob <- load_model(filepath, custom_objects, compile,include_top)
+  return(mob)
+}
 
 image_flow <- function(a,x,y,z){
-  
   flow_images_from_directory(
     directory = paste0(getwd(), "/", a,x), 
     generator =  image_data_generator(
@@ -99,17 +125,17 @@ ui <- fluidPage(
                   choices = c("plainCNN", "mobilenet", "resnet",
                               "effientNet", "dansenet",
                               "mobilenetV3","xception",
-                              "nasnet","VisionTransformer")
+                              "nasnet","VisionTransformer","localweight")
       ),
+      textInput("localweight",
+                "input your localweight for further transfer learning",
+                "NULL"),
       materialSwitch(
         inputId = "Id078",
         label = "Only test mod",
         value = TRUE, 
         status = "danger"
       )
-      
-      
-      
     ),
     
     # Show a plot of the generated distribution
@@ -135,10 +161,8 @@ ui <- fluidPage(
         #"数据增强示例", plotOutput("dataaug")
         #),
         tabPanel(
-          "Grad-Cam",plotOutput("gradcam")
+          "Grad-Cam(under working)",plotOutput("gradcam")
         )
-        
-        
       )
     )
   )
@@ -197,6 +221,8 @@ server <- function(input, output) {
       feature_extractor_url <- "https://hub.tensorflow.google.cn/sayakpaul/vit_s16_classification/1"
       mob <- layer_hub(handle = feature_extractor_url, 
                        input_shape = c(224, 224,3))
+    } else if (input$model == "localweight"){
+      mob <- applications_model_local(input$localweight)
     }
     else {
       model <- keras_model_sequential() %>% 
@@ -216,20 +242,28 @@ server <- function(input, output) {
     # define main models
     mob <- mod()
     unfreeze_weights(mob)
-    inputs <-layer_input(shape = c(224, 224,3) )
-    data_augmentation <- data_augmentations()
-    outputs <- inputs %>% 
-      data_augmentation() %>% 
-      layer_rescaling(1/255) %>% 
-      mob() %>%
-      
-      layer_dropout(rate = input$dropout_factor,name = "dropout") %>% 
-      #layer_conv_2d(filters = 256, kernel_size = 3, activation = "relu",name = "last_conv_layer") %>%
-      layer_average_pooling_2d(pool_size = 2,name = "avg_pool") %>%
-      layer_flatten() %>%
-      layer_dense(units = as.numeric(nums), activation = "softmax",name = "predictions")
-    model <- keras_model(inputs,
-                         outputs)
+    if (input$model == "localweight"){
+      model <- keras_model_sequential() %>% 
+        mob %>% 
+        layer_dense(units = as.numeric(nums), activation = "softmax",name = "predictions")
+    }else {
+      inputs <-layer_input(shape = c(224, 224,3) )
+      data_augmentation <- data_augmentations()
+      outputs <- inputs %>% 
+        data_augmentation() %>% 
+        layer_rescaling(1/255) %>% 
+        mob() %>%
+        
+        layer_dropout(rate = input$dropout_factor,name = "dropout") %>% 
+        #layer_conv_2d(filters = 256, kernel_size = 3, activation = "relu",name = "last_conv_layer") %>%
+        layer_average_pooling_2d(pool_size = 2,name = "avg_pool") %>%
+        layer_flatten() %>%
+        layer_dense(units = as.numeric(nums), activation = "softmax",name = "predictions")
+      model <- keras_model(inputs,
+                           outputs)
+    }
+    return(model)
+    
   })
   
   grad_cam_process <- reactive({
@@ -411,9 +445,6 @@ server <- function(input, output) {
   output$detail_freeze_model <- renderPrint({
     summary(mod())
   })
-  
-  
-  
 }
 
 # Run the application 
