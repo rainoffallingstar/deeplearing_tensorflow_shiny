@@ -252,8 +252,7 @@ server <- function(input, output) {
       outputs <- inputs %>% 
         data_augmentation() %>% 
         layer_rescaling(1/255) %>% 
-        mob() %>%
-        
+        mob %>%
         layer_dropout(rate = input$dropout_factor,name = "dropout") %>% 
         #layer_conv_2d(filters = 256, kernel_size = 3, activation = "relu",name = "last_conv_layer") %>%
         layer_average_pooling_2d(pool_size = 2,name = "avg_pool") %>%
